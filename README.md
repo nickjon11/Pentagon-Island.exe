@@ -1,6 +1,6 @@
 # Pentagon Island — multiplayer game screen prototype
 
-A retro game interface with FastAPI room creation, authenticated host game start, WebSocket room synchronization, dice rolls, turn passing, and a scrollable log. The island illustration is **decorative** in this phase; roads, settlements, trading, robber, real resource accounting, spectators, and multi-player ping broadcasting are not implemented yet. The 'Cards' column for a 7 uses placeholder resource counts until resource mechanics are built.
+A board game interface with FastAPI room creation, authenticated host game start, WebSocket room synchronization, dice rolls, turn passing, and a scrollable log. The island illustration is **decorative** in this phase; roads, settlements, trading, robber, real resource accounting, spectators, and multi-player ping broadcasting are not implemented yet, local play only. The 'Cards' column for a 7 uses placeholder resource counts until resource mechanics are built.
 
 ## Run (WSL / Linux)
 
@@ -20,6 +20,6 @@ Back up `app/main.py`, `app/rooms.py`, `templates/index.html`, `static/js/main.j
 ## Known limitations
 
 - The illustration is a static background, not an interactive board.
-- Ping is measured browser-to-server for the local player; other connected players display `Online` until we add server aggregation.
+- Ping is measured browser-to-server for the local player; other connected players display `Online` until I add server aggregation.
 - Card counts and victory points are prototype values.
 - Room and session state is not persisted across restarts.
