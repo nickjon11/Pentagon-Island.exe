@@ -190,3 +190,28 @@ body.dark-theme{background:#0c0b16;color:#eee}
 @media(prefers-reduced-motion:reduce){
   #home-screen.home:not(.hidden)::before{animation:none;transform:scale(1.08)}
 }
+
+
+/* v0.6.9.1 - AI opponent lobby instructions */
+
+.ai-lobby-hint {
+  margin: 12px 0;
+  padding: 12px;
+  background: #15121e;
+  border: 1px solid #51475f;
+  color: #e8e3f1;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.ai-lobby-hint-title {
+  font-weight: bold;
+  margin-bottom: 5px;
+  text-align: left;
+}
+
+.ai-lobby-hint-path {
+  color: #45f6c0;
+  margin-top: 4px;
+}

@@ -1,4 +1,5 @@
 import asyncio
+import random
 import secrets
 import string
 import time
@@ -39,7 +40,7 @@ class RoomManager:
         code = self.generate_room_code()
         token = secrets.token_urlsafe(24)
         self.rooms[code] = {
-            'host': player_name, 'players': [player_name], 'started': False,
+            'host': player_name, 'players': [player_name], 'ai_players': [], 'started': False,
             'tokens': {token: player_name}, 'spectators': {}, 'departed': [], 'turn_index': 0, 'turn_number': 1,
             'rolled': False, 'last_roll': None, 'victory_points': {player_name: 0},
             'turns_taken': {player_name: 0}, 'log': [], 'road_owner': None,
@@ -64,6 +65,71 @@ class RoomManager:
         room['resources'][player_name] = empty_inventory()
         self.log(code, f'{player_name} joined the room.')
         return token
+
+    def add_ai(self, code, token):
+        room = self.get_room(code)
+        if not self.authorized_host(code, token):
+            return False, 'Only the host can manage AI players.'
+        if room['started']:
+            return False, 'AI players can only be added in the lobby.'
+        if len(room['players']) >= 4:
+            return False, 'The room is full (maximum four players).'
+        name = next((f'Computer {i} (AI)' for i in range(1, 5)
+                     if f'Computer {i} (AI)' not in room['players']), None)
+        if not name:
+            return False, 'No AI slots available.'
+        room['players'].append(name)
+        room['ai_players'].append(name)
+        room['victory_points'][name] = 0
+        room['turns_taken'][name] = 0
+        room['resources'][name] = empty_inventory()
+        self.log(code, f'{name} joined the room.')
+        return True, None
+
+    def remove_ai(self, code, token, name):
+        room = self.get_room(code)
+        if not self.authorized_host(code, token):
+            return False, 'Only the host can manage AI players.'
+        if room['started']:
+            return False, 'Reset the board before removing an AI player.'
+        if name not in room['ai_players']:
+            return False, 'AI player not found.'
+        room['ai_players'].remove(name)
+        room['players'].remove(name)
+        for key in ('victory_points', 'turns_taken', 'resources'):
+            room[key].pop(name, None)
+        self.log(code, f'{name} was removed.')
+        return True, None
+
+    def ai_token(self, room, name):
+        # Tokens are internal; never exposed to clients.
+        for token, player in room['tokens'].items():
+            if player == name:
+                return token
+        token = secrets.token_urlsafe(24)
+        room['tokens'][token] = name
+        return token
+
+    def ai_build_choice(self, room, player, kind, locations):
+        if not locations:
+            return None
+        if kind == 'city':
+            return max(locations, key=lambda v: self.ai_vertex_score(room, int(v[1:])))
+        if kind == 'settlement':
+            return max(locations, key=lambda v: self.ai_vertex_score(room, int(v[1:])) + random.random() * 0.1)
+        # Prefer extending towards an unoccupied, productive intersection.
+        occupied = room['buildings']
+        def score(edge):
+            a, b = EDGES_LIST[int(edge[1:])]
+            return max((self.ai_vertex_score(room, v) if f'v{v}' not in occupied else 0)
+                       for v in (a, b)) + random.random() * 0.5
+        return max(locations, key=score)
+
+    def ai_vertex_score(self, room, vertex):
+        weights = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
+        return sum(weights.get(tile['number'], 0)
+                   for tile, vertices in zip(room['board']['tiles'], HEX_VERTICES)
+                   if vertex in vertices and tile['terrain'] in TERRAIN_RESOURCE)
 
     def join_spectator(self, code, name):
         room = self.get_room(code)
@@ -160,6 +226,9 @@ class RoomManager:
             room['spectators'].pop(spectator_token)
             self.log(code, f'{name} was removed by the host.')
             return True, None, spectator_token
+        if name in room['ai_players']:
+            ok, error = self.remove_ai(code, token, name)
+            return ok, error, None
         if name not in room['players']:
             return False, 'Member not found.', None
         if room['started']:
@@ -329,7 +398,7 @@ class RoomManager:
         if not room:
             return None
         return {
-            'host': room['host'], 'players': room['players'], 'started': room['started'],
+            'host': room['host'], 'players': room['players'], 'ai_players': room['ai_players'], 'started': room['started'],
             'spectators': list(room['spectators'].values()), 'departed': room['departed'],
             'spectators': list(room['spectators'].values()), 'departed': room['departed'],
             'turn_index': room['turn_index'], 'turn_number': room['turn_number'],
@@ -338,7 +407,7 @@ class RoomManager:
             'victory_points': room['victory_points'], 'turns_taken': room['turns_taken'],
             'resource_counts': {p: self.resource_count(room['resources'][p]) for p in room['players']}, 'log': room['log'],
             'road_owner': room['road_owner'], 'army_owner': room['army_owner'],
-            'connected': {p: bool(room['connections'].get(p)) for p in room['players']},
+            'connected': {p: p in room['ai_players'] or bool(room['connections'].get(p)) for p in room['players']},
             'colors': {p: COLORS[i] for i, p in enumerate(room['players'])},
             'buildings': room['buildings'], 'roads': room['roads'], 'cities': room['cities'],
             'board': room['board'], 'phase': room['phase'],

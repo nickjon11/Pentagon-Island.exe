@@ -101,7 +101,7 @@ function renderPlayers(room) {
     for (const val of [room.turns_taken[player], room.victory_points[player]]) { const td=document.createElement('td'); td.textContent=val; row.append(td); }
     const status=document.createElement('td');
     if (seven) status.textContent=room.resource_counts[player] + (room.resource_counts[player]>7?' ⚠':'');
-    else { const dot=document.createElement('span'); dot.className=room.connected[player]?'online':'offline'; dot.textContent='● '; status.append(dot); status.append(document.createTextNode(room.connected[player]?(player===currentPlayer&&pingMs!==null?`${pingMs} ms`:'Online'):'Offline')); }
+    else { const dot=document.createElement('span'); dot.className=room.connected[player]?'online':'offline'; dot.textContent='● '; status.append(dot); status.append(document.createTextNode((room.ai_players||[]).includes(player)?'AI':room.connected[player]?(player===currentPlayer&&pingMs!==null?`${pingMs} ms`:'Online'):'Offline')); }
     row.append(status); body.append(row);
   });
 }
@@ -442,7 +442,7 @@ function openLobbySettings() {
   for(const name of [...room.players,...(room.spectators||[])]) {
     const row=document.createElement('div');row.className='settings-member';
     const label=document.createElement('span');label.textContent=name+(name===room.host?' [HOST]':(room.spectators||[]).includes(name)?' [SPECTATOR]':'');row.append(label);
-    if(host && name!==room.host) {
+    if(host && name!==room.host && !(room.ai_players||[]).includes(name)) {
       const kick=document.createElement('button');kick.type='button';kick.textContent='Kick';
       kick.onclick=async()=>{
         const yes=await showConfirm('KICK MEMBER',`Remove ${name} from the room?`,[['No',false],['Yes',true]]);
@@ -452,6 +452,18 @@ function openLobbySettings() {
       };row.append(kick);
     }
     content.append(row);
+  }
+  const aiHeading=document.createElement('h3');aiHeading.textContent='AI Opponents · v0.6.9.1';content.append(aiHeading);
+  const aiInfo=document.createElement('p');aiInfo.textContent='Easy AI · '+(room.ai_players||[]).length+' computer player(s). Maximum four players total. Add or remove AI before starting.';content.append(aiInfo);
+  if(host && !room.started) {
+    const add=document.createElement('button');add.type='button';add.textContent='+ Add AI Opponent';add.disabled=room.players.length>=4;
+    add.onclick=async()=>{try{await request(`/api/rooms/${currentRoom}/ai/add`,{token:playerToken});win.remove();openLobbySettings();}catch(e){showError(e.message);}};
+    content.append(add);
+    for(const ai of room.ai_players||[]) {
+      const remove=document.createElement('button');remove.type='button';remove.textContent='Remove '+ai;
+      remove.onclick=async()=>{try{await request(`/api/rooms/${currentRoom}/ai/remove`,{token:playerToken,player_name:ai});win.remove();openLobbySettings();}catch(e){showError(e.message);}};
+      content.append(remove);
+    }
   }
   const board=document.createElement('h3');board.textContent='Board Settings';content.append(board);
   const reset=document.createElement('button');reset.textContent='Reset Board';reset.disabled=!host;
