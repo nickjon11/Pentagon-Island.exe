@@ -215,3 +215,79 @@ body.dark-theme{background:#0c0b16;color:#eee}
   color: #45f6c0;
   margin-top: 4px;
 }
+
+/* v0.7.0: standalone browser layout and private trading */
+.title-bar,.status-bar,.window-controls{display:none!important}
+html,body{margin:0;min-height:100%;width:100%}
+.window{width:100%!important;max-width:none!important;min-height:100vh;margin:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;box-sizing:border-box}
+#home-screen,#lobby-screen{min-height:calc(100vh - 36px);box-sizing:border-box}
+#game-screen{width:100%;max-width:none;box-sizing:border-box}
+#trade-layer{position:fixed;inset:0;background:#080610a8;z-index:12000;display:flex;align-items:center;justify-content:center;padding:12px}
+#trade-layer.hidden{display:none!important}
+.trade-window{width:min(680px,96vw);max-height:90vh;overflow:auto;background:#292439;border:3px solid #75638e;box-shadow:7px 7px 0 #100e19;color:#fff;font-family:inherit}
+.trade-title{display:flex;justify-content:space-between;align-items:center;background:#452b78;padding:10px 13px;font-size:12px}
+.trade-title button{width:auto;padding:4px 11px}
+.trade-content{padding:16px;font-size:12px}.trade-content select{display:block;width:100%;margin:8px 0 12px;padding:10px;background:#171321;color:white;border:2px solid #766b8a;font:inherit}
+.trade-content p{font-size:11px;color:#bcb4ca}.trade-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.trade-columns h3{font-size:12px}.trade-resource{display:flex;align-items:center;gap:5px;background:#403750;padding:5px;margin-bottom:4px}
+.trade-resource span:first-child{flex:1}.trade-resource button{width:29px;min-width:29px;padding:5px 0;background:#635576;color:white;border:1px solid #9b8baa;font:inherit}
+.trade-resource button:disabled{opacity:.35}.trade-resource output{min-width:18px;text-align:center}
+.trade-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.trade-actions button{width:auto!important;background:#5a486f!important;color:white!important;border:2px outset #9382a8!important;padding:9px 14px!important;font:inherit!important}
+@media(max-width:520px){.trade-columns{grid-template-columns:1fr}}
+
+.lobby-ai-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.lobby-ai-actions button{font:inherit;font-size:11px;background:#50435f;color:#fff;border:2px outset #81728f;padding:11px 7px}.lobby-ai-actions button:disabled{opacity:.4}@media(max-width:520px){.lobby-ai-actions{grid-template-columns:1fr}}
+
+/* Robber tile highlights (v0.7.0) */
+.robber-target:hover { fill-opacity: .32; stroke: #ffffff; }
+
+/* v0.7.0: responsive full-browser website and lobby guide */
+html,body{min-height:100%;width:100%;margin:0}
+body{padding:0!important}
+.window{width:100%!important;max-width:none!important;min-height:100vh;margin:0!important;border:0!important;box-shadow:none!important}
+.title-bar,.status-bar,.window-controls{display:none!important}
+.menu-bar{width:100%;min-height:34px}
+#home-screen.home:not(.hidden){min-height:calc(100vh - 34px)!important;height:auto!important;background-position:center center!important;background-size:cover!important}
+#home-screen.home:not(.hidden)::before{inset:-12%;background-size:cover;background-position:center center}
+#home-screen .home-grid{position:relative;z-index:1;justify-content:center}
+#lobby-screen.home:not(.hidden){min-height:calc(100vh - 34px);padding:clamp(16px,3vw,38px) clamp(12px,3vw,50px)}
+.lobby-layout{display:grid;grid-template-columns:minmax(300px,0.85fr) minmax(350px,1.15fr);align-items:start;gap:20px;width:min(1160px,100%);margin:24px auto 0;text-align:left}
+.lobby-layout .lobby{margin:0;max-width:none;width:100%}
+.lobby-guide{display:flex;flex-direction:column;gap:14px}
+.lobby-guide-card{background:#343044;border:2px solid #686078;padding:16px 18px;color:#f0edf8}
+.lobby-guide-card h2{font-size:14px;margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid #766b85}
+.lobby-guide-card h3{font-size:13px;margin:14px 0 5px}
+.lobby-guide-card p{font-size:12px;line-height:1.6;margin:0 0 9px}
+.lobby-guide-card .guide-tip{color:#47eeb2}
+.guide-setting{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:5px 0}
+.guide-setting span{color:#c3bbd0}
+.lobby-layout .lobby-ai-actions button{font-size:10px}
+/* Keep the island at a usable size while preserving the 60/40 layout. */
+.game-columns{grid-template-columns:minmax(0,1.55fr) minmax(0,1fr)}
+.game-screen{width:100%;max-width:none}
+.board-frame{width:100%;aspect-ratio:900/781}
+.terrain-board{width:100%;height:100%}
+@media(max-width:1000px){.game-columns{grid-template-columns:1fr}.board-frame{max-width:900px;margin-inline:auto}}
+@media(max-width:760px){.lobby-layout{grid-template-columns:1fr;max-width:560px}.lobby-guide-card{padding:14px}.home-grid{grid-template-columns:1fr;max-width:400px}.actions{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:450px){.lobby-ai-actions{grid-template-columns:1fr}.home h1{font-size:23px}.bottom-strip{grid-template-columns:1fr}}
+
+/* v0.8.1.1: fit the island inside available viewport height and width.
+   Terrain and interaction SVGs retain the same 900 x 781 coordinate system. */
+#game-screen.game-screen{padding:6px 8px;}
+#game-screen .game-columns{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:10px;align-items:start;}
+#game-screen .left-side,#game-screen .right-side{min-width:0;}
+#game-screen .board-frame{width:min(100%,calc((100dvh - 165px) * 900 / 781));height:auto;aspect-ratio:900 / 781;max-height:none;margin-inline:auto;position:relative;overflow:hidden;}
+#game-screen .terrain-board{display:block;width:100%;height:100%;aspect-ratio:900 / 781;}
+#game-screen .build-overlay{position:absolute;inset:0;width:100%;height:100%;} 
+#game-screen .bottom-strip{width:min(100%,calc((100dvh - 165px) * 900 / 781));margin:8px auto 0;min-height:0;}
+#game-screen .right-side{font-size:clamp(10px,0.75vw,13px);}
+#game-screen .section-head{padding:6px 9px;}
+#game-screen .actions button{min-height:clamp(42px,6.2dvh,72px);padding:4px 2px;}
+#game-screen .game-log{height:clamp(90px,18dvh,220px);}
+@media(max-width:1000px){#game-screen .game-columns{grid-template-columns:1fr;}#game-screen .board-frame,#game-screen .bottom-strip{width:min(100%,calc((100dvh - 115px) * 900 / 781));}}
+@media(max-width:600px){#game-screen .board-frame,#game-screen .bottom-strip{width:100%;}#game-screen .bottom-strip{grid-template-columns:1fr;}#game-screen .actions{grid-template-columns:repeat(3,minmax(0,1fr));}}
+
+/* v0.8.2 - sticky navigation and AI lobby controls */
+.menu-bar { position: sticky !important; top: 0; z-index: 10000 !important; background: #302b40; }
+.ai-difficulty-select { margin-left: auto; max-width: 128px; padding: 5px; background:#50435f; color:#fff; border: 1px solid #8b7a9d; font:inherit; font-size: 11px; }
+.ai-difficulty-select:disabled { opacity:.8; cursor:not-allowed; }
+.player-entry:has(.ai-difficulty-select) { align-items:center; flex-wrap:wrap; }

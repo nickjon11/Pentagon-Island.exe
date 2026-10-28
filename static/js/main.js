@@ -47,17 +47,37 @@ function sendPing() {
 setInterval(sendPing, 3000);
 function updateRoom(room) {
   latestRoom = room;
+  isSpectator = !!room.spectator;
+  handlePrivateTrades(room);
   $('player-list').replaceChildren();
   room.players.forEach(player => {
     const entry = document.createElement('div'); entry.className = 'player-entry';
     const name = document.createElement('span'); name.textContent = '● ' + player; entry.append(name);
     if (player === room.host) { const label = document.createElement('span'); label.className='host-label'; label.textContent='[HOST]'; entry.append(label); }
+    if ((room.ai_players || []).includes(player)) {
+      const select = document.createElement('select');
+      select.className = 'ai-difficulty-select';
+      select.setAttribute('aria-label', `Difficulty for ${player}`);
+      ['Easy','Normal','Hard','Aggressive'].forEach(level => {
+        const option = document.createElement('option');
+        option.value = level; option.textContent = level;
+        select.append(option);
+      });
+      select.value = (room.ai_difficulties || {})[player] || 'Normal';
+      select.disabled = room.started || currentPlayer !== room.host;
+      select.onchange = () => perform(select, () => request(
+        `/api/rooms/${currentRoom}/ai/difficulty`,
+        {token:playerToken, player_name:player, difficulty:select.value}
+      ));
+      entry.append(select);
+    }
     $('player-list').append(entry);
   });
   (room.spectators||[]).forEach(name=>{ const entry=document.createElement('div');entry.className='player-entry';entry.textContent='◉ '+name+' [SPECTATOR]';$('player-list').append(entry); });
   $('start-game').classList.toggle('hidden', currentPlayer !== room.host || room.started);
   $('game-end').classList.toggle('hidden', currentPlayer !== room.host);
   $('start-game').disabled = room.players.length < 2;
+  $('lobby-add-ai').disabled = currentPlayer !== room.host || room.started || room.players.length >= 4;
   document.querySelector('.waiting-message').textContent = room.started ? '> GAME STARTED - LOADING BOARD...' : `> ${room.players.length} PLAYER(S) CONNECTED - WAITING...`;
   if (room.started) { showScreen('game-screen'); renderGame(room); }
   else { showScreen('lobby-screen'); }
@@ -68,14 +88,9 @@ function renderInventory(room) {
   const container = $('inventory');
   container.replaceChildren();
   const inventory = room.my_inventory || {};
-  if (room.spectator && room.all_inventories) {
-    for (const [player, hand] of Object.entries(room.all_inventories)) {
-      const card=document.createElement('div');card.className='inventory-card spectator-hand';
-      const title=document.createElement('strong');title.textContent=player;card.append(title);
-      for (const [key, icon, name] of RESOURCE_LABELS) { const line=document.createElement('small');line.textContent=`${icon} ${name}: ${hand[key]||0}`;card.append(line); }
-      container.append(card);
-    }
-    $('inventory-total').textContent='Spectator view · All players’ inventories';return;
+  if (room.spectator) {
+    $('inventory-total').textContent='Spectator view · Player inventories are private';
+    return;
   }
   let total = 0;
   for (const [key, icon, name] of RESOURCE_LABELS) {
@@ -109,15 +124,20 @@ function renderGame(room) {
   renderPlayers(room);
   renderInventory(room);
   renderTerrainBoard(room.board);
+  renderRobber(room);
   renderBuildOverlay(room);
   $('current-player').textContent = room.current_player + (room.current_player===room.host?' (HOST)':'');
   $('turn-info').textContent = room.phase === 'setup' ? `Setup ${room.setup_index + 1}/ ${room.players.length * 2}` : `Turn ${room.turn_number}`;
   $('dice-result').textContent = room.last_roll ? room.last_roll.join(' + ') : '⚄ ⚄';
   const myTurn = !isSpectator && room.current_player === currentPlayer;
   $('roll-dice').disabled = room.phase === 'setup' || !myTurn || room.rolled;
-  $('end-turn').disabled = room.phase === 'setup' || !myTurn || !room.rolled;
-  $('longest-road').textContent = room.road_owner || 'Not awarded';
-  $('largest-army').textContent = room.army_owner || 'Not awarded';
+  $('end-turn').disabled = room.phase === 'setup' || !myTurn || !room.rolled || room.robber_pending;
+  $('longest-road').textContent = room.road_owner ? `${room.road_owner} (${room.road_lengths?.[room.road_owner] || 5} roads, +2 VP)` : 'Not awarded (5+ roads)';
+  $('largest-army').textContent = room.army_owner ? `${room.army_owner} (${room.knights_played?.[room.army_owner] || 3} knights, +2 VP)` : 'Not awarded (3+ knights)';
+  const canKnight = !isSpectator && room.phase === 'play' && myTurn && room.rolled && !room.robber_pending;
+  $('buy-knight').disabled = !canKnight || !['wool','wheat','ore'].every(k => (room.my_inventory?.[k] || 0) >= 1);
+  $('play-knight').disabled = !canKnight || room.knight_used || !(room.my_knights?.ready > 0);
+  $('play-knight').title = `Ready knights: ${room.my_knights?.ready || 0}; newly recruited: ${room.my_knights?.new || 0}`;
   const log = $('game-log');
   const wasAtBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 25;
   log.replaceChildren();
@@ -151,7 +171,14 @@ $('join-room').onclick=()=>perform($('join-room'),async()=>{
 });
 $('start-game').onclick=()=>perform($('start-game'),async()=>{ showConnection('Generating island and starting game...'); try { await request(`/api/rooms/${currentRoom}/start`,{token:playerToken}); } catch(e) { hideConnection(); throw e; } });
 $('roll-dice').onclick=()=>perform($('roll-dice'),()=>request(`/api/rooms/${currentRoom}/roll`,{token:playerToken}));
-$('end-turn').onclick=()=>perform($('end-turn'),()=>request(`/api/rooms/${currentRoom}/end-turn`,{token:playerToken}));
+$('buy-knight').onclick=()=>perform($('buy-knight'),()=>request(`/api/rooms/${currentRoom}/knight/buy`,{token:playerToken}));
+$('play-knight').onclick=()=>perform($('play-knight'),()=>request(`/api/rooms/${currentRoom}/knight/play`,{token:playerToken}));
+$('end-turn').onclick=()=>{
+  if ((latestRoom?.private_trades||[]).some(t=>t.status==='pending')) {
+    return showNotice('UNABLE TO END TURN','You cannot end your turn while a trade is pending.');
+  }
+  return perform($('end-turn'),()=>request(`/api/rooms/${currentRoom}/end-turn`,{token:playerToken}));
+};
 document.querySelectorAll('[data-placeholder]').forEach(button=>button.onclick=()=>showNotice('COMING SOON',button.dataset.placeholder+' is coming in a future update.'));
 
 
@@ -161,7 +188,7 @@ function applyTheme(theme) {
   document.body.classList.toggle('dark-theme', dark);
   localStorage.setItem('pentagon-theme', dark ? 'dark' : 'light');
 }
-applyTheme(localStorage.getItem('pentagon-theme') || 'light');
+applyTheme(localStorage.getItem('pentagon-theme') || 'dark');
 const viewToggle = $('view-menu-toggle');
 const viewDropdown = $('view-dropdown');
 viewToggle.addEventListener('click', () => {
@@ -194,7 +221,7 @@ function renderBuildOverlay(room) {
   const setup = room.phase === 'setup';
   // Setup advances automatically: settlement -> road -> next player.
   if (setup) buildMode = myTurn ? room.setup_step : null;
-  if (!myTurn || (!setup && !room.rolled)) buildMode = null;
+  if (!myTurn || (!setup && (!room.rolled || room.robber_pending))) buildMode = null;
   const valid = new Set(myTurn && buildMode ? (room.valid_builds?.[buildMode] || []) : []);
   for (let i=0;i<E.length;i++) {
     const [a,b] = E[i], [x1,y1]=V[a], [x2,y2]=V[b], owner=room.roads['e'+i];
@@ -220,7 +247,9 @@ function renderBuildOverlay(room) {
   $('build-road').classList.toggle('selected',buildMode==='road');
   $('build-settlement').classList.toggle('selected',buildMode==='settlement');
   $('build-city').classList.toggle('selected',buildMode==='city');
-  $('build-hint').textContent = setup
+  $('build-hint').textContent = room.robber_pending
+    ? (myTurn ? 'ROBBER: Click a highlighted tile to move the robber.' : `Waiting for ${room.current_player} to move the robber.`)
+    : setup
     ? (myTurn ? `Setup: click a highlighted ${room.setup_step === 'road' ? 'edge' : 'intersection'} to place your ${room.setup_step}.` : `Setup: waiting for ${room.current_player}.`)
     : !myTurn ? `Waiting for ${room.current_player}'s turn.`
     : !room.rolled ? 'Roll the dice before building.'
@@ -275,22 +304,68 @@ function renderTerrainBoard(board) {
     if(tile.number!==null) {
       tileGroup.append(svgEl('circle',{cx,cy,r:21,'class':'tile-number'}));
       const label=svgEl('text',{x:cx,y:cy+1,'class':'tile-number-text'+([6,8].includes(tile.number)?' hot':'')});label.textContent=tile.number;tileGroup.append(label);
-    } else {
-      tileGroup.append(svgEl('circle',{cx,cy,r:20,'class':'tile-number'}));
-      const label=svgEl('text',{x:cx,y:cy+1,'class':'tile-number-text'});label.textContent='♟';tileGroup.append(label);
-    }
+    } // Desert has no number token; robber is rendered separately by renderRobber().
     svg.append(tileGroup);
   }
   // Keep board.seed for synchronization; do not display it on the map.
 }
 
 
+// Server-authoritative robber marker and movement target highlights.
+function renderRobber(room) {
+  const board = $('terrain-board');
+  const previous = board.querySelector('#robber-layer');
+  if (previous) previous.remove();
+  if (!room.board || !room.robber_tile) return;
+  const layer = svgEl('g',{id:'robber-layer'});
+  const canMove = room.robber_pending && !isSpectator && room.current_player === currentPlayer;
+  for (const tile of room.board.tiles) {
+    const [cx,cy] = hexCenter(tile);
+    if (canMove && tile.id !== room.robber_tile) {
+      const polygon = svgEl('polygon', {points:hexPoints(cx,cy).map(p=>p.join(',')).join(' '),
+        fill:'#e8c45c','fill-opacity':'0.14',stroke:'#ffe18a','stroke-width':'4',
+        'class':'robber-target'});
+      polygon.style.cursor='pointer';
+      polygon.addEventListener('click',()=>chooseRobberTile(room,tile.id));
+      layer.append(polygon);
+    }
+    if (tile.id === room.robber_tile) {
+      const marker=svgEl('g',{'pointer-events':'none'});
+      marker.append(svgEl('circle',{cx:cx+32,cy:cy-30,r:17,fill:'#18151e',stroke:'#f8dc8d','stroke-width':3}));
+      const label=svgEl('text',{x:cx+32,y:cy-24,'text-anchor':'middle',fill:'#ffffff','font-size':'20','font-weight':'bold'});
+      label.textContent='♟';marker.append(label);layer.append(marker);
+    }
+  }
+  board.append(layer);
+}
+async function chooseRobberTile(room,tileId) {
+  const tile=room.board.tiles.find(t=>t.id===tileId);
+  if(!tile) return;
+  // The server makes the final decision about which victims are eligible.
+  const vertices = room.robber_tile_vertices?.[tileId];
+  // Victim selection is requested from the server if multiple opponents qualify.
+  let victim=null;
+  if (vertices) {
+    const names=[...new Set(vertices.map(v=>room.buildings['v'+v]).filter(n=>n && n!==currentPlayer))];
+    if(names.length>1) {
+      const options=names.filter(n=>(room.resource_counts[n]||0)>0);
+      if(options.length>1) {
+        const chosen=prompt('Choose a player to rob: '+options.join(', '),options[0]);
+        if(chosen===null) return;
+        victim=chosen.trim();
+      }
+    }
+  }
+  try {await request(`/api/rooms/${currentRoom}/robber/move`,{token:playerToken,tile_id:tileId,victim});}
+  catch(e) {showError(e.message);}
+}
+
 // v0.6.4: independent draggable Help windows; client-only, no game-state changes.
 const helpTopics = {
   intro: {title:'How to Play', html:`<h2>Getting Started</h2><p>Pentagon Island is a multiplayer island strategy game. Build settlements and roads, collect resources, and earn victory points.</p><ol><li>Create a room and share its six-character code.</li><li>Once everyone joins, the host starts the game.</li><li>During setup, place a settlement and its connecting road. Each player does this twice in snake order.</li><li>During normal turns, roll the dice, collect resources, build, then end your turn.</li></ol><p>Only legal construction locations are highlighted for the active player.</p>`},
   building: {title:'Building Rules', html:`<h2>Construction</h2><p><b>Road:</b> 1 Wood + 1 Brick. Connect it to your own road or settlement. Opposing roads may meet at empty intersections, but enemy settlements block extension through their vertices.</p><p><b>Settlement:</b> 1 Wood + 1 Brick + 1 Wheat + 1 Wool. Must connect to your road after setup. No settlement may be placed on a vertex directly adjacent to another settlement or city, regardless of owner.</p><p><b>City:</b> 2 Wheat + 3 Ore. Upgrade one of your own settlements; cities produce double resources and are worth 2 VP total.</p><p>The first two settlements and their connecting roads are free during setup.</p>`},
   resources: {title:'Resources & Trading', html:`<h2>Resources</h2><p>Forest produces Wood; Hills produce Brick; Wheat fields produce Wheat; Pasture produces Wool; Mountains produce Ore. Desert produces nothing.</p><p>When a number is rolled, settlements touching tiles with that number collect 1 resource; cities collect 2. Your Inventory shows your private resource counts.</p><h3>Trading</h3><p><b>Coming soon:</b> player-to-player and bank/port trading are not yet available.</p>`},
-  dice: {title:'Dice & Turns', html:`<h2>Taking a Turn</h2><ol><li>When your turn begins, roll two dice.</li><li>Matching terrain tiles produce resources for all eligible players.</li><li>Use your resources to build roads, settlements, or cities.</li><li>Choose End Turn to pass play to the next player.</li></ol><p>Rolling a 7 triggers resource discarding where applicable. <b>Coming soon:</b> interactive robber movement and stealing.</p>`},
+  dice: {title:'Dice & Turns', html:`<h2>Taking a Turn</h2><ol><li>When your turn begins, roll two dice.</li><li>Matching terrain tiles produce resources for all eligible players.</li><li>Use your resources to build roads, settlements, or cities.</li><li>Choose End Turn to pass play to the next player.</li></ol><p>Rolling a 7 discards half the cards (rounded down) for players with more than 7, then the active player moves the robber and may steal one random card. The robber blocks production on its tile.</p>`},
   victory: {title:'Victory Points', html:`<h2>Victory Points</h2><p>Players begin with 0 VP before setup.</p><ul><li>Settlement: 1 VP</li><li>City: 2 VP total (replaces the settlement's 1 VP)</li><li>Longest Road: 2 VP when implemented and awarded</li><li>Largest Army: 2 VP when implemented and awarded</li></ul><p>The full victory condition and special-card awards are still being developed. Follow the on-screen score for currently implemented scoring.</p>`},
   controls: {title:'Controls', html:`<h2>Controls</h2><ul><li><b>Create Game:</b> enter a name to host a room.</li><li><b>Join Game:</b> enter your name and room code.</li><li><b>Roll Dice:</b> roll at the start of your normal turn.</li><li><b>Build Road / Settlement / City:</b> select the action, then click a highlighted legal position.</li><li><b>End Turn:</b> hand the turn to the next player.</li><li><b>View:</b> switch between light and dark themes.</li><li><b>Help:</b> open multiple draggable help windows.</li></ul><p>Drag a help window by its title bar. Use its close button to dismiss it.</p>`},
   about: {title:'About Pentagon Island', html:`<h2>PENTAGON ISLAND</h2><p>Multiplayer Strategy Game</p><p><strong>Jonathan Lachman's Project: 2026</strong></p><p>Version 0.6.5</p><p>A browser-based multiplayer strategy game inspired by Catan, featuring randomized islands, resource collection, and settlement building.</p>`}
@@ -368,6 +443,17 @@ function showNotice(title, message, afterClose) {
     buttons.append(ok); layer.classList.remove('hidden'); ok.focus();
   });
 }
+function showNoticeTimed(title, message, durationMs) {
+  const layer = $('dialog-layer');
+  showNotice(title, message);
+  const titleNode = $('confirm-title');
+  setTimeout(() => {
+    if (!layer.classList.contains('hidden') && titleNode.textContent === title &&
+        $('confirm-message').textContent === message) {
+      layer.classList.add('hidden');
+    }
+  }, durationMs);
+}
 function showError(message) {
   const msg=String(message||'An unexpected error occurred.');
   let title='ACTION FAILED';
@@ -395,14 +481,17 @@ function showConfirm(title,message,choices) {
 }
 async function leaveGame() {
   if (!currentRoom) {returnHome();return;}
-  if (getHost() && latestRoom.started) {
-    const choice=await showConfirm('CLOSE GAME','Leave the current match (host transfers) or end it for everyone?', [['Cancel','cancel'],['Leave','leave'],['End Session','end']]);
-    if (choice==='end') await endSession();
-    if (choice==='leave') { try {await request(`/api/rooms/${currentRoom}/leave`,{token:playerToken});returnHome();} catch(e){showError(e.message);} }
-    return;
+  const warning = latestRoom?.started
+    ? "Are you sure you want to leave? You can return as a spectator, but you won't be able to rejoin as a player until the next match."
+    : "Return to the main menu?";
+  if (getHost() && latestRoom?.started) {
+    const choice=await showConfirm('RETURN TO MENU?',warning,[['CANCEL','cancel'],['LEAVE GAME','leave'],['END SESSION','end']]);
+    if (choice==='end') { await endSession(); return; }
+    if (choice!=='leave') return;
+  } else {
+    const answer=await showConfirm('RETURN TO MENU?',warning,[['CANCEL',false],['LEAVE GAME',true]]);
+    if (!answer) return;
   }
-  const answer=await showConfirm('LEAVE GAME','Return to the main menu?', [['No',false],['Yes',true]]);
-  if (!answer) return;
   try {await request(`/api/rooms/${currentRoom}/leave`,{token:playerToken});returnHome();}
   catch(e){showError(e.message);}
 }
@@ -494,3 +583,89 @@ function showConnection(message) {
   $('connection-layer').classList.remove('hidden');
 }
 function hideConnection() { $('connection-layer').classList.add('hidden'); }
+
+// v0.7.0: Server-validated private player-to-player trading.
+const tradeQuantities = {offer:{},request:{}};
+let lastTradeNotification = '';
+let counteringTrade = null;
+function handlePrivateTrades(room) {
+  const pending = (room.private_trades||[]).find(t=>t.status==='pending' && t.recipient===currentPlayer);
+  if (pending && lastTradeNotification !== pending.id + ':' + pending.sender + ':' + pending.recipient) {
+    lastTradeNotification = pending.id + ':' + pending.sender + ':' + pending.recipient;
+    const describe = hand => Object.entries(hand).filter(([,v])=>v>0).map(([k,v])=>`${v} ${k}`).join(', ');
+    const message = `${pending.sender} offers: ${describe(pending.offer)}.\nThey request: ${describe(pending.request)}.`;
+    (async()=>{
+      const choices = pending.countered
+        ? [['REJECT','reject'],['ACCEPT','accept']]
+        : [['REJECT','reject'],['COUNTEROFFER','counter'],['ACCEPT','accept']];
+      const decision = await showConfirm(pending.countered ? 'COUNTEROFFER' : 'PRIVATE TRADE',message,choices);
+      if (decision === 'counter') {
+        counteringTrade = pending.id;
+        resetTrade();
+        // Counteroffer quantities are from the countering player's perspective.
+        $('trade-layer').classList.remove('hidden');
+        return;
+      }
+      try { await request(`/api/rooms/${currentRoom}/trade/respond`,
+        {token:playerToken,trade_id:pending.id,accept:decision==='accept'}); }
+      catch(e) { showError(e.message); }
+    })();
+  }
+}
+function renderTradeRows(kind, holder) {
+  holder.replaceChildren();
+  for (const [key,icon,name] of RESOURCE_LABELS) {
+    const line=document.createElement('div');line.className='trade-resource';
+    const label=document.createElement('span');label.textContent=`${icon} ${name}`;
+    const minus=document.createElement('button');minus.type='button';minus.textContent='−';
+    const amount=document.createElement('output');amount.textContent=tradeQuantities[kind][key]||0;
+    const plus=document.createElement('button');plus.type='button';plus.textContent='+';
+    const update=()=>{
+      const n=tradeQuantities[kind][key]||0;
+      amount.textContent=n;minus.disabled=n===0;
+      plus.disabled=n>=99 || (kind==='offer' && n>=Number(latestRoom?.my_inventory?.[key]||0));
+    };
+    minus.onclick=()=>{tradeQuantities[kind][key]--;update()};
+    plus.onclick=()=>{tradeQuantities[kind][key]=(tradeQuantities[kind][key]||0)+1;update()};
+    line.append(label,minus,amount,plus);holder.append(line);update();
+  }
+}
+function openTradeWindow() {
+  const room=latestRoom;
+  if (!room?.started || room.phase==='setup' || room.current_player!==currentPlayer || !room.rolled || isSpectator) {
+    showNotice('TRADING UNAVAILABLE','You can trade after rolling on your normal turn.');return;
+  }
+  const selector=$('trade-recipient');selector.replaceChildren();selector.disabled=false;
+  room.players.filter(name=>name!==currentPlayer && !(room.departed||[]).includes(name)).forEach(name=>{
+    const option=document.createElement('option');option.value=name;option.textContent=(room.ai_players||[]).includes(name)?`${name} (AI)`:name;selector.append(option);
+  });
+  if (!selector.options.length){showNotice('NO OPPONENTS','There are no available trade partners.');return;}
+  resetTrade();$('trade-layer').classList.remove('hidden');
+}
+function resetTrade(){tradeQuantities.offer={};tradeQuantities.request={};renderTradeRows('offer',$('trade-offers'));renderTradeRows('request',$('trade-requests'));}
+$('trade-open').onclick=openTradeWindow;
+$('trade-close').onclick=()=>{
+  $('trade-layer').classList.add('hidden');
+  counteringTrade=null;
+};
+$('trade-reset').onclick=resetTrade;
+$('trade-submit').onclick=()=>perform($('trade-submit'),async()=>{
+  if (counteringTrade) {
+    await request(`/api/rooms/${currentRoom}/trade/counter`,
+      {token:playerToken,trade_id:counteringTrade,offer:tradeQuantities.offer,request:tradeQuantities.request});
+    counteringTrade = null;
+    $('trade-layer').classList.add('hidden');
+    return;
+  }
+  const tradeResult = await request(`/api/rooms/${currentRoom}/trade/propose`,{token:playerToken,recipient:$('trade-recipient').value,offer:tradeQuantities.offer,request:tradeQuantities.request});
+  const ai = (latestRoom?.ai_players || []).includes($('trade-recipient').value);
+  $('trade-layer').classList.add('hidden');
+  if (ai) {
+    if (tradeResult.ai_outcome === 'accepted') showNoticeTimed('TRADE ACCEPTED','The AI accepted your trade.',2000);
+    else if (tradeResult.ai_outcome === 'rejected') showNoticeTimed('TRADE REJECTED','The AI rejected your offer.',2000);
+    // Counteroffers appear through the private trade response dialog.
+  } else showNoticeTimed('TRADE SENT','Your proposal was delivered privately.',2000);
+});
+
+$('lobby-add-ai').onclick=()=>perform($('lobby-add-ai'),()=>request(`/api/rooms/${currentRoom}/ai/add`,{token:playerToken}));
+$('lobby-manage').onclick=()=>openLobbySettings();

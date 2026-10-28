@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -7,7 +8,7 @@ from pydantic import BaseModel
 from app.rooms import room_manager
 from app.geometry import VERTEX_POINTS, EDGE_PAIRS
 
-BASE = Path(__file__).resolve().parent.parent
+BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 app = FastAPI()
 app.mount('/static', StaticFiles(directory=BASE / 'static'), name='static')
 templates = Jinja2Templates(directory=BASE / 'templates')
@@ -21,6 +22,23 @@ class BuildRequest(TokenRequest):
     location: str
 class KickRequest(TokenRequest):
     player_name: str
+class RobberRequest(TokenRequest):
+    tile_id: str
+    victim: str | None = None
+class TradeRequest(TokenRequest):
+    recipient: str
+    offer: dict
+    request: dict
+class TradeCounter(TokenRequest):
+    trade_id: str
+    offer: dict
+    request: dict
+class TradeResponse(TokenRequest):
+    trade_id: str
+    accept: bool
+class AIDifficultyRequest(TokenRequest):
+    player_name: str
+    difficulty: str
 class AIRequest(TokenRequest):
     player_name: str = ""
 
@@ -61,6 +79,12 @@ async def add_ai(room_code: str, data: TokenRequest):
     if ok: await room_manager.broadcast_room(room_code)
     return {'success': ok, 'error': error}
 
+@app.post('/api/rooms/{room_code}/ai/difficulty')
+async def change_ai_difficulty(room_code: str, data: AIDifficultyRequest):
+    ok, error = room_manager.set_ai_difficulty(room_code, data.token, data.player_name, data.difficulty)
+    if ok: await room_manager.broadcast_room(room_code)
+    return {'success': ok, 'error': error}
+
 @app.post('/api/rooms/{room_code}/ai/remove')
 async def remove_ai(room_code: str, data: AIRequest):
     ok, error = room_manager.remove_ai(room_code, data.token, data.player_name)
@@ -91,12 +115,35 @@ async def drive_ai(room_code):
                     break
                 ok, _ = room_manager.build(code, token, kind, choice)
             else:
-                if not room['rolled']:
+                if room.get('robber_pending'):
+                    tiles = [t['id'] for t in room['board']['tiles'] if t['id'] != room['robber_tile']]
+                    # Prefer blocking resource tiles touching an opponent; break ties randomly.
+                    tiles.sort(key=lambda t: (len(room_manager.robber_victims(room, t, name)), t != room['robber_tile']), reverse=True)
+                    tile_id = tiles[0]
+                    victims = room_manager.robber_victims(room, tile_id, name)
+                    ok, _ = room_manager.move_robber(code, token, tile_id, victims[0] if victims else None)
+                elif not room['rolled']:
                     ok, _ = room_manager.roll_dice(code, token)
                 else:
                     ok = True
+                    # AI uses previously recruited knights before buying new ones.
+                    if room.get('knights_ready', {}).get(name, 0) and not room.get('knight_used'):
+                        room_manager.play_knight(code, token)
+                        await room_manager.broadcast_room(code)
+                        continue
                     # Keep turns bounded; build a city/settlement first, then at most two roads.
-                    for kind, maximum in [('city', 1), ('settlement', 1), ('road', 2)]:
+                    difficulty = room_manager.ai_difficulty(room, name)
+                    road_threat = max((room.get('road_lengths', {}).get(p, 0)
+                                       for p in room['players'] if p != name), default=0)
+                    if difficulty == 'Aggressive' and road_threat >= 3:
+                        priorities = [('road', 3), ('settlement', 1), ('city', 1)]
+                    elif difficulty in ('Hard', 'Aggressive'):
+                        priorities = [('city', 1), ('settlement', 1), ('road', 2)]
+                    elif difficulty == 'Easy':
+                        priorities = [('settlement', 1), ('road', 1), ('city', 1)]
+                    else:
+                        priorities = [('city', 1), ('settlement', 1), ('road', 2)]
+                    for kind, maximum in priorities:
                         for _ in range(maximum):
                             options = room_manager.valid_build_locations(room, name, kind)
                             choice = room_manager.ai_build_choice(room, name, kind, options)
@@ -105,6 +152,9 @@ async def drive_ai(room_code):
                             built, _ = room_manager.build(code, token, kind, choice)
                             if not built:
                                 break
+                    # Recruit a knight when resources remain after construction.
+                    if room_manager.can_afford(room, name, 'knight'):
+                        room_manager.buy_knight(code, token)
                     ok, _ = room_manager.end_turn(code, token)
             if not ok:
                 break
@@ -122,6 +172,48 @@ def schedule_ai(room_code):
     if task and not task.done():
         return
     _ai_tasks[code] = asyncio.create_task(drive_ai(code))
+
+@app.post('/api/rooms/{room_code}/robber/move')
+async def move_robber(room_code: str, data: RobberRequest):
+    async with room_manager.lock:
+        ok, error = room_manager.move_robber(room_code, data.token, data.tile_id, data.victim)
+    if ok:
+        await room_manager.broadcast_room(room_code)
+        schedule_ai(room_code)
+    return {'success': ok, 'error': error}
+
+@app.post('/api/rooms/{room_code}/trade/propose')
+async def trade_propose(room_code: str, data: TradeRequest):
+    async with room_manager.lock:
+        ok, error = room_manager.propose_trade(room_code, data.token, data.recipient, data.offer, data.request)
+    if ok:
+        await room_manager.broadcast_room(room_code)
+        async def expire_later():
+            await asyncio.sleep(120.05)
+            if room_manager.expire_trades(room_code):
+                await room_manager.broadcast_room(room_code)
+        asyncio.create_task(expire_later())
+    outcome = None
+    if ok:
+        room = room_manager.get_room(room_code)
+        trade = room['trades'].get(str(room['trade_serial']))
+        if trade and data.recipient in room['ai_players']:
+            outcome = 'counteroffer' if trade['status'] == 'pending' else trade['status']
+    return {'success': ok, 'error': error, 'ai_outcome': outcome}
+
+@app.post('/api/rooms/{room_code}/trade/counter')
+async def trade_counter(room_code: str, data: TradeCounter):
+    async with room_manager.lock:
+        ok, error = room_manager.counter_trade(room_code, data.token, data.trade_id, data.offer, data.request)
+    if ok: await room_manager.broadcast_room(room_code)
+    return {'success': ok, 'error': error}
+
+@app.post('/api/rooms/{room_code}/trade/respond')
+async def trade_respond(room_code: str, data: TradeResponse):
+    async with room_manager.lock:
+        ok, error = room_manager.resolve_trade(room_code, data.token, data.trade_id, data.accept)
+    await room_manager.broadcast_room(room_code)
+    return {'success': ok, 'error': error}
 
 @app.post('/api/rooms/{room_code}/start')
 async def start_room(room_code: str, data: TokenRequest):
@@ -144,6 +236,20 @@ async def end_turn(room_code: str, data: TokenRequest):
         await room_manager.broadcast_room(room_code)
         schedule_ai(room_code)
     return {'success': ok, 'error': error}
+@app.post('/api/rooms/{room_code}/knight/buy')
+async def buy_knight(room_code: str, data: TokenRequest):
+    async with room_manager.lock:
+        ok, error = room_manager.buy_knight(room_code, data.token)
+        if ok: await room_manager.broadcast_room(room_code)
+    return {'success': ok, 'error': error}
+
+@app.post('/api/rooms/{room_code}/knight/play')
+async def play_knight(room_code: str, data: TokenRequest):
+    async with room_manager.lock:
+        ok, error = room_manager.play_knight(room_code, data.token)
+        if ok: await room_manager.broadcast_room(room_code)
+    return {'success': ok, 'error': error}
+
 @app.post('/api/rooms/{room_code}/build')
 async def build(room_code: str, data: BuildRequest):
     ok, error = room_manager.build(room_code, data.token, data.kind, data.location)
@@ -166,7 +272,16 @@ async def notify_token(room_code, token, kind):
 @app.post('/api/rooms/{room_code}/leave')
 async def leave(room_code: str, data: TokenRequest):
     ok, error, _ = room_manager.leave_room(room_code, data.token)
-    if ok: await room_manager.broadcast_room(room_code)
+    if ok:
+        if not room_manager.get_room(room_code):
+            for ws in list(room_manager.connections.get(room_code.upper(), [])):
+                try: await ws.send_json({'type': 'session_ended'})
+                except Exception: pass
+        else:
+            await room_manager.broadcast_room(room_code)
+            room = room_manager.get_room(room_code)
+            if room and room['started'] and room['players'][room['turn_index']] in room['ai_players']:
+                schedule_ai(room_code)
     return {'success': ok, 'error': error}
 @app.post('/api/rooms/{room_code}/end-session')
 async def end_session(room_code: str, data: TokenRequest):
