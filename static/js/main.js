@@ -1,3 +1,8 @@
+// v0.9.0: optional remote game host, supplied as ?server=https://HOST or saved locally.
+const serverParam = new URLSearchParams(location.search).get('server');
+if (serverParam) localStorage.setItem('pentagon_server', serverParam);
+const gameServer = (serverParam || localStorage.getItem('pentagon_server') || '').replace(/\/$/, '');
+const apiUrl = path => gameServer + path;
 'use strict';
 const $ = id => document.getElementById(id);
 let socket = null, currentRoom = null, currentPlayer = null, playerToken = null;
@@ -22,7 +27,7 @@ function showLobby(code, player, token, spectator=false) {
 function connectWebSocket() {
   if (socket) socket.close();
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${scheme}//${location.host}/ws/${encodeURIComponent(currentRoom)}?token=${encodeURIComponent(playerToken)}`);
+  const ws = new WebSocket(`${gameServer ? gameServer.replace(/^http/, "ws") : `${scheme}//${location.host}`}/ws/${encodeURIComponent(currentRoom)}?token=${encodeURIComponent(playerToken)}`);
   socket = ws;
   ws.onopen = () => { console.log('Connected to', currentRoom); $('connection-status').textContent='Synchronizing room...'; sendPing(); };
   ws.onmessage = event => {
@@ -145,7 +150,7 @@ function renderGame(room) {
   if (wasAtBottom) log.scrollTop=log.scrollHeight;
 }
 async function request(path, body) {
-  const response = await fetch(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response = await fetch(apiUrl(path), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   const data=await response.json(); if (!data.success) throw new Error(data.error||'Request failed'); return data;
 }
@@ -205,7 +210,7 @@ document.addEventListener('click', event => {
 // These are prototype clickable build sites, not yet the final resource/adjacency rules.
 let V = [];
 let E = [];
-fetch('/api/board-geometry').then(r=>r.json()).then(g=>{V=g.vertices;E=g.edges;if(latestRoom&&latestRoom.started)renderBuildOverlay(latestRoom);}).catch(console.error);
+fetch(apiUrl('/api/board-geometry')).then(r=>r.json()).then(g=>{V=g.vertices;E=g.edges;if(latestRoom&&latestRoom.started)renderBuildOverlay(latestRoom);}).catch(console.error);
 let buildMode = null;
 const overlay = $('build-overlay');
 const SVG_NS = 'http://www.w3.org/2000/svg';

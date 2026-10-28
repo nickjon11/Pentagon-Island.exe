@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from app.rooms import room_manager
@@ -10,6 +11,12 @@ from app.geometry import VERTEX_POINTS, EDGE_PAIRS
 
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 app = FastAPI()
+# The public GitHub Pages client makes cross-origin requests to the temporary host.
+app.add_middleware(CORSMiddleware, allow_origins=[
+    "https://nickjon11.github.io",
+    "http://localhost:8000", "http://127.0.0.1:8000"
+], allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
+
 app.mount('/static', StaticFiles(directory=BASE / 'static'), name='static')
 templates = Jinja2Templates(directory=BASE / 'templates')
 
