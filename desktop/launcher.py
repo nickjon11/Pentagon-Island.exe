@@ -38,11 +38,11 @@ def main():
         raise RuntimeError("Could not start the local game service")
     try:
         import webview
-        webview.create_window("Pentagon Island v0.8.3 - Multiplayer & Trade Update", url, width=1280, height=860, min_size=(760, 560))
+        webview.create_window("Pentagon Island v1.0.0", url, width=1280, height=860, min_size=(760, 560))
         webview.start()
     except ImportError:
         webbrowser.open(url)
-        print(f"Open {url} in your browser; press Ctrl+C to stop.")
+        # Browser fallback is intended for development only.
         try:
             while thread.is_alive():
                 time.sleep(0.3)
